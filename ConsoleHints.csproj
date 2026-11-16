@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{6E0C3B52-9D4A-4F1E-8B7C-2A5D91F0C3E8}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>ConsoleHints</RootNamespace>
+    <AssemblyName>ConsoleHints</AssemblyName>
+    <TargetFrameworkVersion>v2.0</TargetFrameworkVersion>
+    <LangVersion>4</LangVersion>
+    <PlatformTarget>x86</PlatformTarget>
+    <OutputPath>build\</OutputPath>
+    <IntermediateOutputPath>obj\</IntermediateOutputPath>
+
+    <!-- The game has its own mscorlib, so build against that instead of the real .NET one.
+         The two _Framework lines stop MSBuild complaining that .NET 2.0 isn't installed. -->
+    <NoStdLib>true</NoStdLib>
+    <NoConfig>true</NoConfig>
+    <_TargetFrameworkDirectories>$(MSBuildThisFileDirectory)lib\</_TargetFrameworkDirectories>
+    <_FullFrameworkReferenceAssemblyPaths>$(MSBuildThisFileDirectory)lib\</_FullFrameworkReferenceAssemblyPaths>
+    <AutoUnifyAssemblyReferences>false</AutoUnifyAssemblyReferences>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <Optimize>false</Optimize>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <Optimize>true</Optimize>
+    <DefineConstants>TRACE</DefineConstants>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="mscorlib">
+      <HintPath>lib\mscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System">
+      <HintPath>lib\System.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SimIFace">
+      <HintPath>lib\SimIFace.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ScriptCore">
+      <HintPath>lib\ScriptCore.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Sims3GameplaySystems">
+      <HintPath>lib\Sims3GameplaySystems.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UI">
+      <HintPath>lib\UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="src\Hints.cs" />
+    <Compile Include="src\Instantiator.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="src\Tuning.xml" />
+    <None Include="src\ConsoleHints.triggers" />
+    <None Include="build.py" />
+    <None Include="README.md" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
+  <!-- Wrap the DLL into build\ConsoleHints.package. Needs Python; if you don't have it the
+       build still succeeds and you can import the DLL with S3PE instead. -->
+  <Target Name="AfterBuild">
+    <Exec Command="python &quot;$(MSBuildThisFileDirectory)build.py&quot; --package-only --no-deploy" ContinueOnError="true" />
+  </Target>
+</Project>

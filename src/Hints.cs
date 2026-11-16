@@ -31,9 +31,19 @@ namespace ConsoleHints
         // package ships its own little map (ConsoleHints.triggers) that binds it to this.
         private const string kTriggerMap = "ConsoleHints";
         private const uint kDownTrigger = 0x7c0d0001u;
-        private const uint kVisibilityChangeEvent = 33u; // WindowBase.WindowBaseEvents
 
-        private const int kMaxShown = 16;
+        // WindowBase.WindowBaseEvents
+        private const uint kMouseWheelEvent = 9u;
+        private const uint kVisibilityChangeEvent = 33u;
+
+        // The help box's font (style 0x062eb002) has a fixed line spacing of 18 and the
+        // box has a 4px top border, which leaves room for 16 lines. One is kept back for
+        // the "showing x-y of z" footer.
+        private const float kLineHeight = 18f;
+        private const float kTopBorder = 4f;
+        private const int kRows = 15;
+        private const int kWheelStep = 3;
+
         private const int kMaxDescription = 110;
         private const int kMaxTokens = 3000;
 
@@ -44,12 +54,13 @@ namespace ConsoleHints
 
         private static List<Entry> sEntries = new List<Entry>();
         private static List<Entry> sMatches = new List<Entry>();
-        private static int sTotalMatches;
+        private static int sTop; // index of the first match on screen
 
         private static string sTyped = "";
         private static string sLastSet;
         private static int sCycle = -1;
         private static bool sBusy;
+        private static bool sRefocus;
 
         // lower case name -> help text, only for names the game recognised
         private static Dictionary<string, string> sHelpCache = new Dictionary<string, string>();
@@ -60,6 +71,7 @@ namespace ConsoleHints
         private static UIEventHandler<UITextChangeEventArgs> sTextHandler = OnTextChange;
         private static UIEventHandler<UITriggerEventArgs> sTriggerHandler = OnTrigger;
         private static UIEventHandler<UIMouseEventArgs> sMouseHandler = OnBoxMouseUp;
+        private static UIEventHandler<UIMouseEventArgs> sWheelHandler = OnMouseWheel;
         private static UIEventHandler<UIVisibilityChangeEventArgs> sHiddenHandler = OnDialogVisibility;
 
         private static uint sTriggerHook;
@@ -96,10 +108,18 @@ namespace ConsoleHints
             {
                 Attach(dialog);
             }
+            else if (sRefocus)
+            {
+                // A click on the list hands keyboard focus to the list after our handler
+                // has already run, so take it back a tick later.
+                sRefocus = false;
+                UIManager.SetFocus(InputContext.kICKeyboard, sInput);
+            }
         }
 
         // The game builds a brand new dialog every time the console is opened, so this
-        // runs once per open. Nothing needs unhooking, the windows die with the dialog.
+        // runs once per open. The event handlers die with the dialog's windows, only the
+        // trigger hook at the bottom has to be taken off by hand.
         private static void Attach(CommandConsoleDialog dialog)
         {
             sAttached = dialog;
@@ -109,6 +129,8 @@ namespace ConsoleHints
             sTyped = "";
             sLastSet = null;
             sCycle = -1;
+            sTop = 0;
+            sRefocus = false;
             sMatches.Clear();
 
             Dialog window = dialog.mModalDialogWindow;
@@ -148,6 +170,8 @@ namespace ConsoleHints
             input.TextChange += sTextHandler;
             window.TriggerDown += sTriggerHandler;
             box.MouseUp += sMouseHandler;
+            UIManager.RegisterEvent<UIMouseEventArgs>(box, kMouseWheelEvent, sWheelHandler);
+            UIManager.RegisterEvent<UIMouseEventArgs>(input, kMouseWheelEvent, sWheelHandler);
 
             // One above the dialog's own hook (18) so the down arrow gets here first.
             // The hook has to come off again before the window is destroyed, and the
@@ -284,7 +308,7 @@ namespace ConsoleHints
 
         private static void OnTextChange(WindowBase sender, UITextChangeEventArgs args)
         {
-            if (sBusy || sInput == null)
+            if (sBusy)
             {
                 return;
             }
@@ -314,19 +338,13 @@ namespace ConsoleHints
         private static void OnTrigger(WindowBase sender, UITriggerEventArgs args)
         {
             bool next = args.TriggerCode == kTabTrigger || args.TriggerCode == kDownTrigger;
-            if (!next || sInput == null || sMatches.Count == 0)
+            if (!next || sMatches.Count == 0 || TypingArgs())
             {
                 return;
             }
 
             try
             {
-                // Past the command name and into its arguments, nothing to complete
-                if (sTyped.TrimStart().IndexOf(' ') >= 0)
-                {
-                    return;
-                }
-
                 Select((sCycle + 1) % sMatches.Count);
                 args.Handled = true;
             }
@@ -346,8 +364,8 @@ namespace ConsoleHints
         }
 
         // Clicking a suggestion. The list is one big TextEdit rather than a row per
-        // command, but a click puts the box's caret where the mouse was, so counting the
-        // line breaks before the caret says which line got clicked.
+        // command, so work out the row from where the mouse was. MousePosition is relative
+        // to the box.
         private static void OnBoxMouseUp(WindowBase sender, UIMouseEventArgs args)
         {
             if (args.MouseKey != MouseKeys.kMouseLeft || !sShowing || sMatches.Count == 0)
@@ -357,33 +375,71 @@ namespace ConsoleHints
 
             try
             {
-                string shown = sBox.Caption ?? "";
-                int caret = Math.Min((int)sBox.CursorIndex, shown.Length);
-                int line = 0;
-                for (int i = 0; i < caret; i++)
+                // The box also gets told about clicks that weren't on it, like ones on the
+                // input line above (those come through with a negative y).
+                Vector2 pos = args.MousePosition;
+                Rect area = sBox.Area;
+                if (pos.x < 0f || pos.y < 0f || pos.x > area.Width || pos.y > area.Height)
                 {
-                    if (shown[i] == '\n')
-                    {
-                        line++;
-                    }
+                    return;
                 }
 
-                // Don't wipe out arguments that are already typed, and ignore the
-                // "... N more" line at the bottom
-                bool typingArgs = sTyped.TrimStart().IndexOf(' ') >= 0;
-                if (!typingArgs && line < sMatches.Count)
+                int row = (int)(Math.Max(0f, pos.y - kTopBorder) / kLineHeight);
+                int index = sTop + row;
+
+                // Rows past the end are the footer or empty space
+                if (!TypingArgs() && row < kRows && index < sMatches.Count)
                 {
-                    Select(line);
+                    Select(index);
                 }
 
-                // The click moved keyboard focus to the list, give it back
                 UIManager.SetFocus(InputContext.kICKeyboard, sInput);
+                sRefocus = true;
                 args.Handled = true;
             }
             catch (Exception ex)
             {
                 ShowText("Console Hints error: " + ex.Message);
             }
+        }
+
+        private static void OnMouseWheel(WindowBase sender, UIMouseEventArgs args)
+        {
+            if (!sShowing || sMatches.Count <= kRows)
+            {
+                return;
+            }
+
+            try
+            {
+                int delta = args.MouseWheelDelta;
+                if (delta == 0)
+                {
+                    return;
+                }
+
+                // wheel up is positive
+                ScrollTo(sTop + (delta > 0 ? -kWheelStep : kWheelStep));
+                Render();
+                args.Handled = true;
+            }
+            catch (Exception ex)
+            {
+                ShowText("Console Hints error: " + ex.Message);
+            }
+        }
+
+        // Once there's a space the command name is done and the user is on to its
+        // arguments. Completing at that point would wipe out what they've typed.
+        private static bool TypingArgs()
+        {
+            return sTyped.TrimStart().IndexOf(' ') >= 0;
+        }
+
+        private static void ScrollTo(int top)
+        {
+            int last = Math.Max(0, sMatches.Count - kRows);
+            sTop = Math.Max(0, Math.Min(top, last));
         }
 
         private static void Select(int index)
@@ -404,13 +460,23 @@ namespace ConsoleHints
                 sBusy = false;
             }
 
+            // keep the selected row on screen
+            if (index < sTop)
+            {
+                ScrollTo(index);
+            }
+            else if (index >= sTop + kRows)
+            {
+                ScrollTo(index - kRows + 1);
+            }
+
             Render();
         }
 
         private static void Refresh()
         {
             sMatches.Clear();
-            sTotalMatches = 0;
+            sTop = 0;
 
             string text = sTyped.TrimStart();
             int space = text.IndexOf(' ');
@@ -429,7 +495,6 @@ namespace ConsoleHints
                     if (entry.Lower == word)
                     {
                         sMatches.Add(entry);
-                        sTotalMatches = 1;
                         break;
                     }
                 }
@@ -444,13 +509,7 @@ namespace ConsoleHints
                     {
                         int at = entry.Lower.IndexOf(word);
                         bool hit = pass == 0 ? at == 0 : at > 0;
-                        if (!hit)
-                        {
-                            continue;
-                        }
-
-                        sTotalMatches++;
-                        if (sMatches.Count < kMaxShown)
+                        if (hit)
                         {
                             sMatches.Add(entry);
                         }
@@ -471,10 +530,11 @@ namespace ConsoleHints
         private static void Render()
         {
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < sMatches.Count; i++)
+            int end = Math.Min(sTop + kRows, sMatches.Count);
+            for (int i = sTop; i < end; i++)
             {
                 Entry entry = sMatches[i];
-                if (i > 0)
+                if (i > sTop)
                 {
                     sb.Append('\n');
                 }
@@ -491,10 +551,10 @@ namespace ConsoleHints
                 }
             }
 
-            int hidden = sTotalMatches - sMatches.Count;
-            if (hidden > 0)
+            if (sMatches.Count > kRows)
             {
-                sb.Append("\n   ... ").Append(hidden).Append(" more, keep typing");
+                sb.Append("\n   ... showing ").Append(sTop + 1).Append('-').Append(end);
+                sb.Append(" of ").Append(sMatches.Count).Append(", scroll for more");
             }
 
             ShowText(sb.ToString());
