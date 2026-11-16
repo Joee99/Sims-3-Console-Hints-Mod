@@ -1,0 +1,3 @@
+#define Next 0x7c0d0001
+
+down = Next
