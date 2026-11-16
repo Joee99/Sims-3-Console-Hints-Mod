@@ -2,6 +2,8 @@
 
     python build.py              compile, package, deploy
     python build.py --no-deploy  compile and package only (output goes in build/)
+    python build.py --package-only  skip compiling, package build/ConsoleHints.dll as it is
+                                    (the Visual Studio project calls this after a build)
 
 Needs the game's DLLs to compile against, see README. Close the game before deploying,
 it keeps its packages locked while running.
@@ -106,7 +108,10 @@ def main():
     dll_path = os.path.join(out_dir, ASSEMBLY + ".dll")
     package_path = os.path.join(out_dir, ASSEMBLY + ".package")
 
-    compile_dll(dll_path)
+    if "--package-only" not in sys.argv:
+        compile_dll(dll_path)
+    elif not os.path.exists(dll_path):
+        sys.exit("Nothing to package, %s doesn't exist yet." % dll_path)
 
     with open(dll_path, "rb") as f:
         dll = f.read()
