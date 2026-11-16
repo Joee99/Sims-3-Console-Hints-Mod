@@ -1,4 +1,7 @@
 build/
+obj/
+.vs/
+*.user
 lib/
 __pycache__/
 *.pyc
